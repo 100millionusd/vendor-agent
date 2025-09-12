@@ -27,9 +27,10 @@ app.post("/upload-offer", upload.single("file"), async (req, res) => {
   try {
     // 1. Upload PDF to OpenAI (force .pdf filename)
     const file = await client.files.create({
-      file: fs.createReadStream(req.file.path),
-      purpose: "assistants",
-      filename: req.file.originalname   // 👈 preserves the .pdf extension
+      file: fs.createReadStream(req.file.path, {
+        filename: req.file.originalname   // ✅ fix: ensures .pdf is preserved
+      }),
+      purpose: "assistants"
     });
 
     // 2. Create a thread
