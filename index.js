@@ -37,14 +37,17 @@ app.post("/upload-offer", upload.single("file"), async (req, res) => {
 
     // 2. Create a thread
     const thread = await client.beta.threads.create();
-    console.log("🧵 Created thread:", thread);
+    console.log("🧵 Full thread object:", thread);
 
-    if (!thread?.id) {
-      throw new Error("Thread creation failed — no ID returned.");
+    // Extract threadId safely
+    const threadId = thread?.id || thread?.data?.id;
+    if (!threadId) {
+      throw new Error("Thread creation failed — no ID found in response");
     }
+    console.log("✅ Using threadId:", threadId);
 
     // 3. Add vendor message (attach PDF with tools)
-    await client.beta.threads.messages.create(thread.id, {
+    await client.beta.threads.messages.create(threadId, {
       role: "user",
       content:
         "Analyze this vendor offer and compare with DB reference prices. Always return JSON with fields: item, vendor_price, reference_price, difference_percent, verdict.",
@@ -55,10 +58,10 @@ app.post("/upload-offer", upload.single("file"), async (req, res) => {
         }
       ]
     });
-    console.log("📨 Added vendor message to thread:", thread.id);
+    console.log("📨 Added vendor message to thread:", threadId);
 
     // 4. Run the Vendor Assistant
-    const run = await client.beta.threads.runs.create(thread.id, {
+    const run = await client.beta.threads.runs.create(threadId, {
       assistant_id: process.env.VENDOR_AGENT_ID
     });
     console.log("🏃 Created run:", run);
@@ -70,12 +73,12 @@ app.post("/upload-offer", upload.single("file"), async (req, res) => {
     // Poll until run is finished
     let runStatus;
     do {
-      runStatus = await client.beta.threads.runs.retrieve(thread.id, run.id);
+      runStatus = await client.beta.threads.runs.retrieve(threadId, run.id);
       console.log("⏳ Run status:", runStatus.status);
     } while (runStatus.status !== "completed");
 
     // 5. Get the AI analysis
-    const messages = await client.beta.threads.messages.list(thread.id);
+    const messages = await client.beta.threads.messages.list(threadId);
     const aiReply = messages.data[0]?.content[0]?.text?.value || "No reply";
     console.log("🤖 AI Reply:", aiReply);
 
