@@ -3,6 +3,7 @@ import multer from "multer";
 import pkg from "pg";
 import OpenAI from "openai";
 import fs from "fs";
+import { File } from "node:buffer";   // ✅ Use File object
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -24,13 +25,13 @@ const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
  */
 app.post("/upload-offer", upload.single("file"), async (req, res) => {
   try {
-    // 1. Read file and create upload stream
-    const fileStream = fs.createReadStream(req.file.path);
+    // 1. Wrap PDF in File object to preserve extension
+    const pdfBuffer = fs.readFileSync(req.file.path);
+    const openaiFile = new File([pdfBuffer], req.file.originalname);
 
     const file = await client.files.create({
-      file: fileStream,
+      file: openaiFile,
       purpose: "assistants"
-      // ❌ REMOVED: filename: req.file.originalname
     });
     console.log("📄 Uploaded file to OpenAI:", file);
 
@@ -85,18 +86,9 @@ app.post("/upload-offer", upload.single("file"), async (req, res) => {
     );
     console.log("💾 Saved analysis to DB");
 
-    // Clean up uploaded file
-    fs.unlinkSync(req.file.path);
-
     res.json({ success: true, analysis: aiReply });
   } catch (err) {
     console.error("❌ Agent 2 error:", err);
-    
-    // Clean up uploaded file on error too
-    if (req.file?.path) {
-      fs.unlinkSync(req.file.path);
-    }
-    
     res.status(500).json({ error: err.message });
   }
 });
