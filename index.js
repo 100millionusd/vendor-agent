@@ -3,7 +3,7 @@ import multer from "multer";
 import pkg from "pg";
 import OpenAI from "openai";
 import fs from "fs";
-import { File } from "node:buffer";   // ✅ Use File object
+import { File } from "node:buffer";   // ✅ Use File object (Node 20+)
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -72,10 +72,12 @@ app.post("/upload-offer", upload.single("file"), async (req, res) => {
     }
     console.log("🧵 threadId:", threadId, "🏃 runId:", run.id);
 
-    // 3. Poll run until completed
+    // 3. Poll run until completed (✅ correct SDK signature)
     let runStatus;
     do {
-      runStatus = await client.beta.threads.runs.retrieve(threadId, run.id); // ✅ correct order
+      runStatus = await client.beta.threads.runs.retrieve(run.id, {
+        thread_id: threadId
+      });
       console.log("⏳ Run status:", runStatus.status);
 
       if (["failed", "cancelled", "expired"].includes(runStatus.status)) {
