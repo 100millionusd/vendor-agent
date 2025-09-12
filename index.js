@@ -25,23 +25,24 @@ const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
  */
 app.post("/upload-offer", upload.single("file"), async (req, res) => {
   try {
-    // 1. Upload PDF to OpenAI
+    // 1. Upload PDF to OpenAI (force .pdf filename)
     const file = await client.files.create({
       file: fs.createReadStream(req.file.path),
-      purpose: "assistants"
+      purpose: "assistants",
+      filename: req.file.originalname   // 👈 preserves the .pdf extension
     });
 
     // 2. Create a thread
     const thread = await client.beta.threads.create();
 
-    // 3. Add vendor message (attach PDF)
+    // 3. Add vendor message (attach PDF with tools)
     await client.beta.threads.messages.create(thread.id, {
       role: "user",
       content: "Analyze this vendor offer and compare with DB reference prices. Always return JSON with fields: item, vendor_price, reference_price, difference_percent, verdict.",
       attachments: [
         {
           file_id: file.id,
-          tools: [{ type: "file_search" }]   // 👈 FIXED: tools required
+          tools: [{ type: "file_search" }]
         }
       ]
     });
@@ -64,7 +65,7 @@ app.post("/upload-offer", upload.single("file"), async (req, res) => {
     // 6. Save into Postgres (using your existing `offer_id` table)
     await pool.query(
       "INSERT INTO offer_id (file_url, parsed_data, ai_analysis) VALUES ($1, $2, $3)",
-      [req.file.path, "PDF handled by Assistant API", aiReply]
+      [req.file.originalname, "PDF handled by Assistant API", aiReply]
     );
 
     res.json({ success: true, analysis: aiReply });
