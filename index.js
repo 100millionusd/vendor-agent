@@ -40,9 +40,9 @@ app.post("/upload-offer", upload.single("file"), async (req, res) => {
     console.log("🧵 Full thread object:", thread);
 
     // Extract threadId safely
-    const threadId = thread?.id || thread?.data?.id;
+    const threadId = thread?.id || thread?.data?.id || thread?.thread_id;
     if (!threadId) {
-      throw new Error("Thread creation failed — no ID found in response");
+      throw new Error("Thread creation failed — no thread ID returned");
     }
     console.log("✅ Using threadId:", threadId);
 
@@ -62,7 +62,9 @@ app.post("/upload-offer", upload.single("file"), async (req, res) => {
 
     // 4. Run the Vendor Assistant
     const run = await client.beta.threads.runs.create(threadId, {
-      assistant_id: process.env.VENDOR_AGENT_ID
+      assistant_id: process.env.VENDOR_AGENT_ID,
+      tool_choice: "auto",
+      parallel_tool_calls: true
     });
     console.log("🏃 Created run:", run);
 
