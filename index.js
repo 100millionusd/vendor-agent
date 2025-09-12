@@ -3,7 +3,7 @@ import multer from "multer";
 import pkg from "pg";
 import OpenAI from "openai";
 import fs from "fs";
-import { File } from "node:buffer";   // ✅ Use File object
+import { File } from "node:buffer";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -12,11 +12,15 @@ const app = express();
 const upload = multer({ dest: "uploads/" });
 const port = process.env.PORT || 3000;
 
-// === Database (Railway Postgres) ===
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+// ensure uploads dir exists (Railway ephemeral fs)
+try { fs.mkdirSync("uploads", { recursive: true }); } catch {}
 
-// === OpenAI Client ===
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+function sleep(ms) {
+  return new Promise(res => setTimeout(res, ms));
+}
 
 /**
  * -------------------------------
@@ -25,66 +29,73 @@ const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
  */
 app.post("/upload-offer", upload.single("file"), async (req, res) => {
   try {
-    // 1. Wrap PDF in File object to preserve extension
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+
+    // 1) Wrap PDF in File (preserves .pdf name for OpenAI)
     const pdfBuffer = fs.readFileSync(req.file.path);
     const openaiFile = new File([pdfBuffer], req.file.originalname);
 
-    const file = await client.files.create({
+    const uploaded = await client.files.create({
       file: openaiFile,
       purpose: "assistants"
     });
-    console.log("📄 Uploaded file to OpenAI:", file);
+    console.log("📄 OpenAI file:", uploaded.id, uploaded.filename);
 
-    // 2. Create a thread
-    const thread = await client.beta.threads.create();
-    console.log("🧵 Full thread object:", thread);
-
-    // Extract threadId safely
-    const threadId = thread?.id || thread?.data?.id || thread?.thread_id;
-    if (!threadId) {
-      throw new Error("Thread creation failed — no thread ID returned");
-    }
-    console.log("✅ Using threadId:", threadId);
-
-    // 3. Add vendor message (attach PDF with tools)
-    await client.beta.threads.messages.create(threadId, {
-      role: "user",
-      content:
-        "Analyze this vendor offer and compare with DB reference prices. Always return JSON with fields: item, vendor_price, reference_price, difference_percent, verdict.",
-      attachments: [
-        {
-          file_id: file.id,
-          tools: [{ type: "file_search" }]
-        }
-      ]
-    });
-    console.log("📨 Added vendor message to thread:", threadId);
-
-    // 4. Run the Vendor Assistant
-    const run = await client.beta.threads.runs.create(threadId, {
+    // 2) Create-and-Run: avoids separate thread creation
+    const run = await client.beta.threads.createAndRun({
       assistant_id: process.env.VENDOR_AGENT_ID,
+      thread: {
+        messages: [
+          {
+            role: "user",
+            content:
+              "Analyze this vendor offer and compare with DB reference prices. Always return JSON with fields: item, vendor_price, reference_price, difference_percent, verdict.",
+            attachments: [
+              {
+                file_id: uploaded.id,
+                tools: [{ type: "file_search" }]
+              }
+            ]
+          }
+        ]
+      },
       tool_choice: "auto",
-      parallel_tool_calls: true
+      parallel_tool_calls: true,
+      response_format: { type: "text" }
     });
-    console.log("🏃 Created run:", run);
 
-    if (!run?.id) {
-      throw new Error("Run creation failed — no ID returned.");
+    const threadId = run.thread_id;
+    if (!threadId) {
+      throw new Error("createAndRun did not return thread_id");
     }
+    console.log("🧵 threadId:", threadId, "🏃 runId:", run.id);
 
-    // Poll until run is finished
-    let runStatus;
+    // 3) Poll run until completed
+    let status;
     do {
-      runStatus = await client.beta.threads.runs.retrieve(threadId, run.id);
-      console.log("⏳ Run status:", runStatus.status);
-    } while (runStatus.status !== "completed");
+      const current = await client.beta.threads.runs.retrieve(threadId, run.id);
+      status = current.status;
+      console.log("⏳ Run status:", status);
+      if (status === "failed" || status === "cancelled" || status === "expired") {
+        throw new Error(`Run ended with status: ${status}`);
+      }
+      if (status !== "completed") await sleep(1200);
+    } while (status !== "completed");
 
-    // 5. Get the AI analysis
-    const messages = await client.beta.threads.messages.list(threadId);
-    const aiReply = messages.data[0]?.content[0]?.text?.value || "No reply";
+    // 4) Fetch assistant reply
+    const msgs = await client.beta.threads.messages.list(threadId, { limit: 10 });
+    // find most recent assistant message
+    const assistantMsg = msgs.data.find(m => m.role === "assistant") || msgs.data[0];
+    const aiReply =
+      assistantMsg?.content?.[0]?.text?.value ||
+      assistantMsg?.content?.[0]?.[assistantMsg?.content?.[0]?.type]?.value ||
+      "No reply";
+
     console.log("🤖 AI Reply:", aiReply);
 
-    // 6. Save into Postgres
+    // 5) Save into Postgres (your existing table)
     await pool.query(
       "INSERT INTO offer_id (file_url, parsed_data, ai_analysis) VALUES ($1, $2, $3)",
       [req.file.originalname, "PDF handled by Assistant API", aiReply]
