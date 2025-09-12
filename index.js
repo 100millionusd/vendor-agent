@@ -3,7 +3,7 @@ import multer from "multer";
 import pkg from "pg";
 import OpenAI from "openai";
 import fs from "fs";
-import { File } from "node:buffer";
+import { File } from "node:buffer";   // ✅ Use File object
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -12,14 +12,14 @@ const app = express();
 const upload = multer({ dest: "uploads/" });
 const port = process.env.PORT || 3000;
 
-// ensure uploads dir exists (Railway ephemeral fs)
-try { fs.mkdirSync("uploads", { recursive: true }); } catch {}
-
+// === Database (Railway Postgres) ===
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+// === OpenAI Client ===
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 function sleep(ms) {
-  return new Promise(res => setTimeout(res, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
@@ -33,17 +33,17 @@ app.post("/upload-offer", upload.single("file"), async (req, res) => {
       return res.status(400).json({ error: "No file uploaded" });
     }
 
-    // 1) Wrap PDF in File (preserves .pdf name for OpenAI)
+    // 1. Wrap PDF in File object to preserve extension
     const pdfBuffer = fs.readFileSync(req.file.path);
     const openaiFile = new File([pdfBuffer], req.file.originalname);
 
-    const uploaded = await client.files.create({
+    const file = await client.files.create({
       file: openaiFile,
       purpose: "assistants"
     });
-    console.log("📄 OpenAI file:", uploaded.id, uploaded.filename);
+    console.log("📄 OpenAI file:", file.id, file.filename);
 
-    // 2) Create-and-Run: avoids separate thread creation
+    // 2. Create-and-Run
     const run = await client.beta.threads.createAndRun({
       assistant_id: process.env.VENDOR_AGENT_ID,
       thread: {
@@ -54,7 +54,7 @@ app.post("/upload-offer", upload.single("file"), async (req, res) => {
               "Analyze this vendor offer and compare with DB reference prices. Always return JSON with fields: item, vendor_price, reference_price, difference_percent, verdict.",
             attachments: [
               {
-                file_id: uploaded.id,
+                file_id: file.id,
                 tools: [{ type: "file_search" }]
               }
             ]
@@ -68,26 +68,28 @@ app.post("/upload-offer", upload.single("file"), async (req, res) => {
 
     const threadId = run.thread_id;
     if (!threadId) {
-      throw new Error("createAndRun did not return thread_id");
+      throw new Error("createAndRun did not return a thread_id");
     }
     console.log("🧵 threadId:", threadId, "🏃 runId:", run.id);
 
-    // 3) Poll run until completed
-    let status;
+    // 3. Poll run until completed
+    let runStatus;
     do {
-      const current = await client.beta.threads.runs.retrieve(threadId, run.id);
-      status = current.status;
-      console.log("⏳ Run status:", status);
-      if (status === "failed" || status === "cancelled" || status === "expired") {
-        throw new Error(`Run ended with status: ${status}`);
-      }
-      if (status !== "completed") await sleep(1200);
-    } while (status !== "completed");
+      runStatus = await client.beta.threads.runs.retrieve(threadId, run.id); // ✅ correct order
+      console.log("⏳ Run status:", runStatus.status);
 
-    // 4) Fetch assistant reply
+      if (["failed", "cancelled", "expired"].includes(runStatus.status)) {
+        throw new Error(`Run ended with status: ${runStatus.status}`);
+      }
+
+      if (runStatus.status !== "completed") {
+        await sleep(1200);
+      }
+    } while (runStatus.status !== "completed");
+
+    // 4. Fetch assistant reply
     const msgs = await client.beta.threads.messages.list(threadId, { limit: 10 });
-    // find most recent assistant message
-    const assistantMsg = msgs.data.find(m => m.role === "assistant") || msgs.data[0];
+    const assistantMsg = msgs.data.find((m) => m.role === "assistant") || msgs.data[0];
     const aiReply =
       assistantMsg?.content?.[0]?.text?.value ||
       assistantMsg?.content?.[0]?.[assistantMsg?.content?.[0]?.type]?.value ||
@@ -95,7 +97,7 @@ app.post("/upload-offer", upload.single("file"), async (req, res) => {
 
     console.log("🤖 AI Reply:", aiReply);
 
-    // 5) Save into Postgres (your existing table)
+    // 5. Save into Postgres
     await pool.query(
       "INSERT INTO offer_id (file_url, parsed_data, ai_analysis) VALUES ($1, $2, $3)",
       [req.file.originalname, "PDF handled by Assistant API", aiReply]
