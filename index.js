@@ -37,8 +37,13 @@ app.post("/upload-offer", upload.single("file"), async (req, res) => {
     // 3. Add vendor message (attach PDF)
     await client.beta.threads.messages.create(thread.id, {
       role: "user",
-      content: "Analyze this vendor offer and compare with DB reference prices.",
-      attachments: [{ file_id: file.id }]
+      content: "Analyze this vendor offer and compare with DB reference prices. Always return JSON with fields: item, vendor_price, reference_price, difference_percent, verdict.",
+      attachments: [
+        {
+          file_id: file.id,
+          tools: [{ type: "file_search" }]   // 👈 FIXED: tools required
+        }
+      ]
     });
 
     // 4. Run the Vendor Assistant
@@ -56,9 +61,9 @@ app.post("/upload-offer", upload.single("file"), async (req, res) => {
     const messages = await client.beta.threads.messages.list(thread.id);
     const aiReply = messages.data[0].content[0].text.value;
 
-    // 6. Save into Postgres
+    // 6. Save into Postgres (using your existing `offer_id` table)
     await pool.query(
-      "INSERT INTO vendor_offers (file_url, parsed_data, ai_analysis) VALUES ($1, $2, $3)",
+      "INSERT INTO offer_id (file_url, parsed_data, ai_analysis) VALUES ($1, $2, $3)",
       [req.file.path, "PDF handled by Assistant API", aiReply]
     );
 
