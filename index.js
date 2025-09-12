@@ -3,6 +3,7 @@ import multer from "multer";
 import pkg from "pg";
 import OpenAI from "openai";
 import fs from "fs";
+import { File } from "node:buffer";   // ✅ Import File from node:buffer
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -25,11 +26,12 @@ const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
  */
 app.post("/upload-offer", upload.single("file"), async (req, res) => {
   try {
-    // 1. Upload PDF to OpenAI (force .pdf filename)
+    // 1. Wrap PDF in File object to preserve extension
+    const pdfBuffer = fs.readFileSync(req.file.path);
+    const openaiFile = new File([pdfBuffer], req.file.originalname);
+
     const file = await client.files.create({
-      file: fs.createReadStream(req.file.path, {
-        filename: req.file.originalname   // ✅ fix: ensures .pdf is preserved
-      }),
+      file: openaiFile,
       purpose: "assistants"
     });
 
