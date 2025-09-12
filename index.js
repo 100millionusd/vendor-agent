@@ -5,12 +5,20 @@ import OpenAI from "openai";
 import fs from "fs";
 import { File } from "node:buffer";   // ✅ Use File object (Node 20+)
 import dotenv from "dotenv";
+import cors from "cors";              // ✅ NEW: enable CORS
 
 dotenv.config();
 const { Pool } = pkg;
 const app = express();
 const upload = multer({ dest: "uploads/" });
 const port = process.env.PORT || 3000;
+
+// ✅ Enable CORS so Netlify frontend can call this backend
+app.use(cors({
+  origin: "https://lithiumx.netlify.app", // restrict to your frontend domain
+  methods: ["POST", "GET", "OPTIONS"],
+  allowedHeaders: ["Content-Type"],
+}));
 
 // === Database (Railway Postgres) ===
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -51,7 +59,7 @@ app.post("/upload-offer", upload.single("file"), async (req, res) => {
           {
             role: "user",
             content:
-              "Analyze this vendor offer and compare with DB reference prices. Always return JSON with fields: item, vendor_price, reference_price, difference_percent, verdict.",
+              "Analyze this vendor offer and compare with DB reference prices. Always return JSON with fields: item, vendor_price, reference_price, difference_percent, verdict, overall_verdict.",
             attachments: [
               {
                 file_id: file.id,
@@ -72,7 +80,7 @@ app.post("/upload-offer", upload.single("file"), async (req, res) => {
     }
     console.log("🧵 threadId:", threadId, "🏃 runId:", run.id);
 
-    // 3. Poll run until completed (✅ correct SDK signature)
+    // 3. Poll run until completed
     let runStatus;
     do {
       runStatus = await client.beta.threads.runs.retrieve(run.id, {
