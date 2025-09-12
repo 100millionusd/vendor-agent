@@ -29,8 +29,8 @@ app.post("/upload-offer", upload.single("file"), async (req, res) => {
 
     const file = await client.files.create({
       file: fileStream,
-      purpose: "assistants",
-      filename: req.file.originalname // Preserve original filename with extension
+      purpose: "assistants"
+      // ❌ REMOVED: filename: req.file.originalname
     });
     console.log("📄 Uploaded file to OpenAI:", file);
 
@@ -85,9 +85,18 @@ app.post("/upload-offer", upload.single("file"), async (req, res) => {
     );
     console.log("💾 Saved analysis to DB");
 
+    // Clean up uploaded file
+    fs.unlinkSync(req.file.path);
+
     res.json({ success: true, analysis: aiReply });
   } catch (err) {
     console.error("❌ Agent 2 error:", err);
+    
+    // Clean up uploaded file on error too
+    if (req.file?.path) {
+      fs.unlinkSync(req.file.path);
+    }
+    
     res.status(500).json({ error: err.message });
   }
 });
