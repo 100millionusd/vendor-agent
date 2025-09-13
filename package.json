@@ -1,16 +1,13 @@
 {
   "name": "vendor-agent",
   "version": "1.0.0",
-  "description": "Vendor Offer Checker backend",
-  "main": "index.js",
+  "description": "Vendor Offer Checker backend (Agent 2 worker)",
+  "main": "worker.js",
   "type": "module",
   "scripts": {
-    "start": "node index.js",
+    "start": "node worker.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^17.2.2",
