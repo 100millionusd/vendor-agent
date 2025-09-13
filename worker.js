@@ -1,95 +1,87 @@
 // worker.js — Agent 2 background worker
 // -------------------------------------
-import dotenv from "dotenv";
-import pkg from "pg";
+import "dotenv/config";
 import OpenAI from "openai";
+import pg from "pg";
 
-dotenv.config();
-const { Pool } = pkg;
-
-// ====== DB connection ======
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }, // Railway Postgres usually requires SSL
-});
-
-// ====== OpenAI client ======
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// ====== Core: Analyze a bid ======
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }, // Railway Postgres usually requires SSL
+});
+
 async function analyzeBid(bid) {
   const prompt = `
-  Analyze the following vendor bid:
-  Vendor: ${bid.vendorname}
-  Price: $${bid.priceusd}
+  Analyze this vendor bid in Bolivia construction context:
+
+  Vendor: ${bid.vendor_name}
+  Price (USD): ${bid.price_usd}
+  Price (BOB): ${bid.price_bol}
   Days: ${bid.days}
   Notes: ${bid.notes || "N/A"}
-  Wallet: ${bid.walletaddress}
-  Stablecoin: ${bid.preferredstablecoin}
 
-  Return a JSON object with fields:
-  - clarity (1-10)
-  - feasibility (1-10)
-  - budget_risk (low/medium/high)
-  - timeline_risk (low/medium/high)
-  - issues (list of concerns)
-  - summary (short vendor-facing explanation)
+  Return ONLY valid JSON with this shape:
+  {
+    "verdict": "Fair | Overpriced | Suspicious",
+    "reasoning": "short explanation",
+    "suggestions": ["...","..."]
+  }
   `;
 
-  try {
-    const resp = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [{ role: "user", content: prompt }],
-      response_format: { type: "json_object" },
-    });
+  const resp = await client.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [{ role: "user", content: prompt }],
+    response_format: { type: "json_object" },
+  });
 
+  try {
     return JSON.parse(resp.choices[0].message.content || "{}");
-  } catch (err) {
-    console.error("❌ AI analysis failed:", err);
-    return { error: err.message };
+  } catch {
+    return {
+      verdict: "Unknown",
+      reasoning: "AI returned invalid JSON",
+      suggestions: [],
+    };
   }
 }
 
-// ====== Worker loop ======
 async function runWorker() {
-  console.log("🤖 Agent 2 worker started…");
+  console.log("🚀 Agent 2 Worker started. Watching for new bids...");
 
   while (true) {
     try {
-      // 1. Find unprocessed bids (aiAnalysis is NULL)
+      // Find the next unanalyzed bid
       const { rows } = await pool.query(
-        `SELECT * FROM bids WHERE aiAnalysis IS NULL ORDER BY createdat ASC LIMIT 1`
+        `SELECT * FROM bids WHERE ai_analysis IS NULL ORDER BY created_at ASC LIMIT 1`
       );
 
       if (rows.length === 0) {
-        await new Promise((r) => setTimeout(r, 10000)); // wait 10s
+        await new Promise((r) => setTimeout(r, 5000)); // Wait before retry
         continue;
       }
 
       const bid = rows[0];
-      console.log(`🔍 Analyzing bid ${bid.bidid} for proposal ${bid.proposalid}`);
+      console.log(`⚙️ Analyzing bid ${bid.bid_id} for proposal ${bid.proposal_id}`);
 
-      // 2. Run AI analysis
+      // Run OpenAI analysis
       const analysis = await analyzeBid(bid);
 
-      // 3. Save result into DB
+      // Save result back into database
       await pool.query(
-        `UPDATE bids SET aiAnalysis = $1 WHERE bidId = $2`,
-        [analysis, bid.bidid]
+        `UPDATE bids SET ai_analysis = $1 WHERE bid_id = $2`,
+        [analysis, bid.bid_id]
       );
 
-      console.log(`✅ Stored AI analysis for bid ${bid.bidid}`);
+      console.log(`✅ Stored AI analysis for bid ${bid.bid_id}`);
     } catch (err) {
       console.error("❌ Worker error:", err);
-      await new Promise((r) => setTimeout(r, 15000)); // pause longer on error
+      await new Promise((r) => setTimeout(r, 10000)); // Wait longer on error
     }
   }
 }
 
-// ====== Start worker ======
-runWorker().catch((err) => {
-  console.error("❌ Fatal error:", err);
-  process.exit(1);
-});
+// Start worker
+runWorker();
